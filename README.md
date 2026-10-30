@@ -2,6 +2,12 @@
 
 Compresse une vidéo pour qu'elle passe sous la limite d'upload de Discord, directement depuis le clic droit de l'Explorateur Windows.
 
+![Interface de Discordable : aperçu, découpe, paramètres et estimation](docs/interface.png)
+
+| Encodage en cours | Résultat : 1 Go → 18,8 Mo |
+|---|---|
+| ![Barre de progression pendant l'encodage](docs/encodage.png) | ![Fin de l'encodage avec aperçu du résultat](docs/resultat.png) |
+
 ## Fonctionnalités
 
 - **Clic droit → Discordable** sur n'importe quelle vidéo (mp4, mkv, mov, avi, webm, wmv, flv, m4v, ts, mpg, 3gp).

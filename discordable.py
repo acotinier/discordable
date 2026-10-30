@@ -574,6 +574,8 @@ def run_gui(path):
             self.player.setSource(QUrl())  # libère le fichier de sortie s'il était ouvert
             self.player.setSource(QUrl.fromLocalFile(self.src))
             start, end = self.trim()
+            self.player.setPosition(int(start * 1000))
+            self.player.pause()  # garde une image affichée pendant l'encodage
             self.job = {
                 "start": start, "duration": end - start, "plan": p, "retries": 0,
                 "audio": self.combo_audio.currentData() if self.info["has_audio"] else 0,
