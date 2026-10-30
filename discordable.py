@@ -5,7 +5,7 @@ Usage :
     python discordable.py --install     ajoute "Discordable" au clic droit des vidéos
     python discordable.py --uninstall   retire l'entrée du clic droit
 """
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 import glob
 import json
