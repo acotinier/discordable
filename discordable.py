@@ -5,7 +5,7 @@ Usage :
     python discordable.py --install     ajoute "Discordable" au clic droit des vidéos
     python discordable.py --uninstall   retire l'entrée du clic droit
 """
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 
 import glob
 import json
@@ -20,6 +20,7 @@ VIDEO_EXTS = [".mp4", ".mkv", ".mov", ".avi", ".webm", ".wmv", ".flv", ".m4v", "
 SIZES = [2160, 1440, 1080, 720, 480, 360]  # côté court, en pixels
 PRESETS = {"Rapide": "veryfast", "Équilibré": "medium", "Qualité": "slow"}
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+REPO = "acotinier/discordable"
 FROZEN = getattr(sys, "frozen", False)  # lancé depuis l'exe PyInstaller
 APP_DIR = Path(sys.executable if FROZEN else __file__).resolve().parent
 
@@ -115,23 +116,34 @@ def quality_label(bpp):
     return "faible"
 
 
-def build_cmds(ffmpeg, src, dst, start, duration, p, audio_kbps, preset, logbase):
-    """Renvoie les commandes ffmpeg de la passe 1 et de la passe 2 (x264 deux passes)."""
-    head = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-progress", "pipe:1", "-nostats",
-            "-ss", f"{start:.3f}", "-i", src, "-t", f"{duration:.3f}",
-            "-map", "0:v:0", "-c:v", "libx264", "-preset", preset, "-b:v", str(p["v_bps"]),
-            "-pix_fmt", "yuv420p", "-passlogfile", logbase]
-    filters = []
+def build_cmds(ffmpeg, src, dst, segments, p, audio_kbps, preset, logbase):
+    """Renvoie les commandes ffmpeg de la passe 1 et de la passe 2 (x264 deux passes).
+
+    segments : liste de (début, fin) en secondes, mis bout à bout dans cet ordre.
+    audio_kbps : 0 = pas de son (muet ou source sans piste audio).
+    """
+    inputs = []
+    for start, end in segments:  # la vidéo est ouverte une fois par segment : seek rapide sur chacun
+        inputs += ["-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", src]
+    post = []
     if p["side"]:  # le côté court devient p["side"], quelle que soit l'orientation
         s = p["side"]
-        filters.append(f"scale='if(gte(iw,ih),-2,{s})':'if(gte(iw,ih),{s},-2)'")
+        post.append(f"scale='if(gte(iw,ih),-2,{s})':'if(gte(iw,ih),{s},-2)'")
     if p["fps"]:
-        filters.append(f"fps={p['fps']:g}")
-    if filters:
-        head += ["-vf", ",".join(filters)]
-    audio = ["-map", "0:a:0?", "-c:a", "aac", "-b:a", f"{audio_kbps}k"] if audio_kbps else ["-an"]
-    pass1 = head + ["-pass", "1", "-an", "-f", "null", "-"]
-    pass2 = head + ["-pass", "2"] + audio + ["-movflags", "+faststart", dst]
+        post.append(f"fps={p['fps']:g}")
+
+    def graph(with_audio):
+        pads = "".join(f"[{i}:v:0]" + (f"[{i}:a:0]" if with_audio else "") for i in range(len(segments)))
+        g = f"{pads}concat=n={len(segments)}:v=1:a={int(with_audio)}[cv]" + ("[a]" if with_audio else "")
+        return g + f";[cv]{','.join(post) or 'null'}[v]"
+
+    head = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-progress", "pipe:1", "-nostats", *inputs]
+    video = ["-map", "[v]", "-c:v", "libx264", "-preset", preset, "-b:v", str(p["v_bps"]),
+             "-pix_fmt", "yuv420p", "-passlogfile", logbase]
+    audio = ["-map", "[a]", "-c:a", "aac", "-b:a", f"{audio_kbps}k"] if audio_kbps else []
+    pass1 = head + ["-filter_complex", graph(False)] + video + ["-pass", "1", "-an", "-f", "null", "-"]
+    pass2 = (head + ["-filter_complex", graph(bool(audio_kbps))] + video + ["-pass", "2"] + audio
+             + ["-movflags", "+faststart", dst])
     return pass1, pass2
 
 
@@ -139,6 +151,20 @@ def fmt_time(sec):
     m, s = divmod(max(sec, 0), 60)
     h, m = divmod(int(m), 60)
     return f"{h}:{m:02}:{s:05.2f}" if h else f"{m}:{s:05.2f}"
+
+
+def newer_release(release, current):
+    """Réponse JSON de l'API GitHub « releases/latest » -> (version, url, taille) de l'installeur, si plus récent."""
+    def version(tag):
+        return tuple(int(x) for x in tag.lstrip("v").split("."))
+
+    try:
+        if version(release["tag_name"]) <= version(current):
+            return None
+    except (KeyError, ValueError):
+        return None
+    asset = next((a for a in release.get("assets", []) if a["name"].lower().endswith(".exe")), None)
+    return (release["tag_name"].lstrip("v"), asset["browser_download_url"], asset["size"]) if asset else None
 
 
 # ---------------------------------------------------------------- clic droit Windows
@@ -184,9 +210,10 @@ def run_gui(path):
     from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QShortcut
     from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
     from PySide6.QtMultimediaWidgets import QVideoWidget
+    from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
     from PySide6.QtWidgets import (
-        QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
-        QLabel, QMessageBox, QProgressBar, QPushButton, QSlider, QStyle, QVBoxLayout, QWidget,
+        QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
+        QLabel, QListWidget, QMessageBox, QProgressBar, QPushButton, QSlider, QStyle, QVBoxLayout, QWidget,
     )
 
     STYLE = """
@@ -203,15 +230,22 @@ def run_gui(path):
     QProgressBar { background:#1e1f22; border:none; border-radius:4px; text-align:center; height:18px; }
     QProgressBar::chunk { background:#5865f2; border-radius:4px; }
     QLabel#muted { color:#949ba4; }
+    QListWidget { background:#1e1f22; border:none; border-radius:4px; }
+    QListWidget::item:selected { background:#404249; color:white; }
+    QFrame#banner { background:#5865f2; border-radius:6px; }
+    QFrame#banner QLabel { background:transparent; color:white; }
+    QFrame#banner QPushButton { background:white; color:#5865f2; font-weight:bold; }
+    QFrame#banner QPushButton#later { background:transparent; color:white; font-weight:normal; }
     """
     RED, GREEN, ORANGE = "#f23f43", "#23a55a", "#f0b232"
 
     class Timeline(QSlider):
-        """Slider cliquable qui affiche la zone conservée."""
+        """Slider cliquable qui affiche les segments conservés."""
 
         def __init__(self):
             super().__init__(Qt.Horizontal)
-            self.selection = None  # (début_ms, fin_ms)
+            self.segments = []  # [(début_ms, fin_ms)]
+            self.current = -1
             self.setMinimumHeight(26)
 
         def mousePressEvent(self, e):
@@ -223,10 +257,12 @@ def run_gui(path):
 
         def paintEvent(self, e):
             super().paintEvent(e)
-            if self.selection and self.maximum():  # barre bleue sous le rail = partie conservée
+            if self.segments and self.maximum():  # barres sous le rail = parties conservées
                 p = QPainter(self)
-                a, b = (int(v / self.maximum() * self.width()) for v in self.selection)
-                p.fillRect(a, self.height() - 5, max(b - a, 2), 5, QColor("#5865f2"))
+                for i, seg in enumerate(self.segments):
+                    a, b = (int(v / self.maximum() * self.width()) for v in seg)
+                    color = "#5865f2" if i == self.current else "#3c4396"  # segment édité plus vif
+                    p.fillRect(a, self.height() - 5, max(b - a, 2), 5, QColor(color))
                 p.end()
 
     class Window(QWidget):
@@ -239,9 +275,13 @@ def run_gui(path):
             self.proc = None
             self.dst = str(Path(src).with_name(Path(src).stem + "_discord.mp4"))
             self.showing_result = False
-            self.play_selection = False
+            self.play_queue = []  # segments restant à lire avec « Lire la sélection »
+            self.segments = [(0.0, self.info["duration"])]  # en secondes, triés
+            self.cur = 0  # segment édité par les champs Début / Fin
+            self.loading = False
+            self.update_info = None
             self.setWindowTitle(f"Discordable — {Path(src).name}")
-            self.resize(1180, 680)
+            self.resize(1180, 760)
             self.setStyleSheet(STYLE)
             self.setAcceptDrops(False)
 
@@ -278,9 +318,16 @@ def run_gui(path):
             self.btn_out.clicked.connect(lambda: self.spin_end.setValue(self.player.position() / 1000))
             self.btn_sel = QPushButton("▶ Lire la sélection")
             self.btn_sel.clicked.connect(self.play_sel)
+            self.btn_add = QPushButton("+ Ajouter un segment")
+            self.btn_add.setToolTip("Ajoute un segment à la position de lecture ; les segments sont mis bout à bout")
+            self.btn_add.clicked.connect(self.add_segment)
+            self.btn_del = QPushButton("Supprimer")
+            self.btn_del.clicked.connect(self.del_segment)
             self.btn_reset_trim = QPushButton("Tout garder")
-            self.btn_reset_trim.clicked.connect(
-                lambda: (self.spin_start.setValue(0), self.spin_end.setValue(self.info["duration"])))
+            self.btn_reset_trim.clicked.connect(self.reset_segments)
+            self.list_seg = QListWidget()
+            self.list_seg.setFixedHeight(64)
+            self.list_seg.currentRowChanged.connect(self.load_segment)
             self.lbl_sel = QLabel()
             self.lbl_sel.setObjectName("muted")
 
@@ -292,13 +339,14 @@ def run_gui(path):
             for w in (self.btn_in, QLabel("Début"), self.spin_start, QLabel("Fin"), self.spin_end, self.btn_out):
                 trim_row.addWidget(w)
             trim_row2 = QHBoxLayout()
-            trim_row2.addWidget(self.btn_sel)
-            trim_row2.addWidget(self.btn_reset_trim)
+            for w in (self.btn_sel, self.btn_add, self.btn_del, self.btn_reset_trim):
+                trim_row2.addWidget(w)
             trim_row2.addStretch()
             trim_row2.addWidget(self.lbl_sel)
             trim_box = QGroupBox("Découpe")
             tl = QVBoxLayout(trim_box)
             tl.addLayout(trim_row)
+            tl.addWidget(self.list_seg)
             tl.addLayout(trim_row2)
 
             left = QVBoxLayout()
@@ -419,9 +467,27 @@ def run_gui(path):
             right_w.setLayout(right)
             right_w.setFixedWidth(400)
 
-            root = QHBoxLayout(self)
-            root.addLayout(left, 1)
-            root.addWidget(right_w)
+            # --- bandeau de mise à jour (caché tant qu'aucune nouvelle version n'est trouvée)
+            self.banner = QFrame()
+            self.banner.setObjectName("banner")
+            self.lbl_update = QLabel()
+            self.btn_update = QPushButton("Mettre à jour")
+            self.btn_update.clicked.connect(self.do_update)
+            btn_later = QPushButton("Plus tard")
+            btn_later.setObjectName("later")
+            btn_later.clicked.connect(self.banner.hide)
+            bl = QHBoxLayout(self.banner)
+            bl.addWidget(self.lbl_update, 1)
+            bl.addWidget(self.btn_update)
+            bl.addWidget(btn_later)
+            self.banner.hide()
+
+            columns = QHBoxLayout()
+            columns.addLayout(left, 1)
+            columns.addWidget(right_w)
+            root = QVBoxLayout(self)
+            root.addWidget(self.banner)
+            root.addLayout(columns)
 
             QShortcut(QKeySequence(Qt.Key_Space), self, self.toggle_play)
             QShortcut(QKeySequence(Qt.Key_I), self, self.btn_in.click)
@@ -432,13 +498,16 @@ def run_gui(path):
             for w in (self.spin_limit, self.spin_target):
                 w.valueChanged.connect(self.refresh)
             for w in (self.spin_start, self.spin_end):
-                w.valueChanged.connect(self.on_trim)
+                w.valueChanged.connect(self.on_spin)
             for w in (self.combo_res, self.combo_fps, self.combo_audio, self.combo_preset):
                 w.currentIndexChanged.connect(self.refresh)
             self.update_dst_label()
-            self.on_trim()
+            self.on_segments()
             self.player.setSource(QUrl.fromLocalFile(src))
             self.player.pause()  # affiche la première image
+            self.net = QNetworkAccessManager(self)
+            if FROZEN:  # en mode script, on se met à jour avec git
+                self.check_update()
 
         # --- réglages
         def load_settings(self, defaults=False):
@@ -467,54 +536,117 @@ def run_gui(path):
             self.settings.setValue("preset", self.combo_preset.currentData())
 
         # --- découpe / lecture
-        def trim(self):
-            return self.spin_start.value(), self.spin_end.value()
+        def kept(self):
+            """Segments réellement encodés, dans l'ordre chronologique."""
+            return [(s, e) for s, e in self.segments if e - s >= 0.1]
 
-        def on_trim(self):
-            start, end = self.trim()
+        def select(self, seg):
+            self.segments.sort()
+            self.cur = self.segments.index(seg)
+
+        def load_segment(self, row):
+            if row < 0 or row >= len(self.segments):
+                return
+            self.cur = row
+            self.loading = True  # évite que on_spin réécrive le segment pendant le chargement
+            self.spin_start.setValue(self.segments[row][0])
+            self.spin_end.setValue(self.segments[row][1])
+            self.loading = False
+            self.player.setPosition(int(self.segments[row][0] * 1000))
+            self.on_segments()
+
+        def on_spin(self):
+            if self.loading:
+                return
+            seg = (self.spin_start.value(), self.spin_end.value())
+            self.segments[self.cur] = seg
+            self.select(seg)
+            self.on_segments()
+
+        def add_segment(self):
+            dur = self.info["duration"]
+            start = min(self.player.position() / 1000, max(dur - 5, 0))
+            seg = (start, min(start + 5, dur))
+            self.segments.append(seg)
+            self.select(seg)
+            self.load_segment(self.cur)
+
+        def del_segment(self):
+            if len(self.segments) > 1:
+                del self.segments[self.cur]
+                self.load_segment(min(self.cur, len(self.segments) - 1))
+
+        def reset_segments(self):
+            self.segments = [(0.0, self.info["duration"])]
+            self.load_segment(0)
+
+        def on_segments(self):
+            self.list_seg.blockSignals(True)
+            self.list_seg.clear()
+            for i, (s, e) in enumerate(self.segments):
+                self.list_seg.addItem(f"{i + 1}.   {fmt_time(s)}  →  {fmt_time(e)}     ({fmt_time(max(e - s, 0))})")
+            self.list_seg.setCurrentRow(self.cur)
+            self.list_seg.blockSignals(False)
+            self.btn_del.setEnabled(len(self.segments) > 1 and not self.showing_result)
             if not self.showing_result:
-                self.timeline.selection = (start * 1000, end * 1000)
+                self.timeline.segments = [(s * 1000, e * 1000) for s, e in self.segments]
+                self.timeline.current = self.cur
                 self.timeline.update()
-            self.lbl_sel.setText(f"Sélection : {fmt_time(max(end - start, 0))}")
+            kept = self.kept()
+            text = f"Total : {fmt_time(sum(e - s for s, e in kept))}"
+            if len(kept) > 1:
+                text += f" ({len(kept)} segments)"
+            if any(a[1] > b[0] for a, b in zip(kept, kept[1:])):
+                text += f" — <span style='color:{ORANGE}'>segments qui se chevauchent</span>"
+            self.lbl_sel.setText(text)
             self.refresh()
 
         def on_position(self, ms):
             if not self.timeline.isSliderDown():
                 self.timeline.setValue(ms)
             self.lbl_pos.setText(fmt_time(ms / 1000))
-            if self.play_selection and ms >= self.trim()[1] * 1000:
-                self.player.pause()
-                self.play_selection = False
+            if self.play_queue and ms >= self.play_queue[0][1] * 1000:  # fin du segment : on saute au suivant
+                self.play_queue.pop(0)
+                if self.play_queue:
+                    self.player.setPosition(int(self.play_queue[0][0] * 1000))
+                else:
+                    self.player.pause()
 
         def toggle_play(self):
-            self.play_selection = False
+            self.play_queue = []
             if self.player.playbackState() == QMediaPlayer.PlayingState:
                 self.player.pause()
             else:
                 self.player.play()
 
         def play_sel(self):
-            self.player.setPosition(int(self.trim()[0] * 1000))
-            self.play_selection = True
-            self.player.play()
+            self.play_queue = self.kept()
+            if self.play_queue:
+                self.player.setPosition(int(self.play_queue[0][0] * 1000))
+                self.player.play()
 
         def toggle_result(self):
             self.player.stop()
             self.showing_result = not self.showing_result
             self.player.setSource(QUrl.fromLocalFile(self.dst if self.showing_result else self.src))
             self.btn_result.setText("Revoir l'original" if self.showing_result else "Voir le résultat")
-            self.timeline.selection = None if self.showing_result else tuple(v * 1000 for v in self.trim())
-            for w in (self.btn_in, self.btn_out, self.btn_sel, self.spin_start, self.spin_end, self.btn_reset_trim):
+            self.play_queue = []
+            for w in (self.btn_in, self.btn_out, self.btn_sel, self.spin_start, self.spin_end, self.btn_reset_trim,
+                      self.btn_add, self.list_seg):
                 w.setEnabled(not self.showing_result)
+            if self.showing_result:
+                self.timeline.segments = []
+                self.timeline.update()
+            self.on_segments()
             self.player.play()
 
         # --- estimation
         def current_plan(self):
-            start, end = self.trim()
-            if end - start < 0.1:
+            duration = sum(e - s for s, e in self.kept())
+            if duration < 0.1:
                 return None
             audio = self.combo_audio.currentData() if self.info["has_audio"] else 0
-            return plan(self.info, end - start, self.spin_target.value(), audio,
+            return plan(self.info, duration, self.spin_target.value(), audio,
                         self.combo_res.currentData(), self.combo_fps.currentData())
 
         def refresh(self):
@@ -573,11 +705,11 @@ def run_gui(path):
                 self.player.stop()
             self.player.setSource(QUrl())  # libère le fichier de sortie s'il était ouvert
             self.player.setSource(QUrl.fromLocalFile(self.src))
-            start, end = self.trim()
-            self.player.setPosition(int(start * 1000))
+            segments = self.kept()
+            self.player.setPosition(int(segments[0][0] * 1000))
             self.player.pause()  # garde une image affichée pendant l'encodage
             self.job = {
-                "start": start, "duration": end - start, "plan": p, "retries": 0,
+                "segments": segments, "duration": sum(e - s for s, e in segments), "plan": p, "retries": 0,
                 "audio": self.combo_audio.currentData() if self.info["has_audio"] else 0,
                 "preset": self.combo_preset.currentData(),
                 "log": os.path.join(tempfile.gettempdir(), f"discordable_{os.getpid()}"),
@@ -589,7 +721,7 @@ def run_gui(path):
 
         def cmds(self):
             j = self.job
-            return build_cmds(self.ffmpeg, self.src, self.dst, j["start"], j["duration"], j["plan"],
+            return build_cmds(self.ffmpeg, self.src, self.dst, j["segments"], j["plan"],
                               j["audio"], j["preset"], j["log"])
 
         def run_next(self):
@@ -676,6 +808,54 @@ def run_gui(path):
             if busy:
                 self.progress.setValue(0)
             self.refresh()
+
+        # --- mise à jour automatique
+        def request(self, url):
+            req = QNetworkRequest(QUrl(url))
+            req.setHeader(QNetworkRequest.UserAgentHeader, f"Discordable/{__version__}")
+            return self.net.get(req)
+
+        def check_update(self):
+            reply = self.request(f"https://api.github.com/repos/{REPO}/releases/latest")
+            reply.finished.connect(lambda: self.on_release(reply))
+
+        def on_release(self, reply):
+            reply.deleteLater()
+            if reply.error() != QNetworkReply.NoError:
+                return  # hors ligne ou API indisponible : on réessaiera au prochain lancement
+            try:
+                self.update_info = newer_release(json.loads(bytes(reply.readAll())), __version__)
+            except ValueError:
+                return
+            if self.update_info:
+                self.lbl_update.setText(f"Une nouvelle version de Discordable est disponible : "
+                                        f"<b>{self.update_info[0]}</b> (installée : {__version__})")
+                self.banner.show()
+
+        def do_update(self):
+            if self.proc:
+                QMessageBox.information(self, "Discordable", "Attends la fin de l'encodage pour mettre à jour.")
+                return
+            version, url, size = self.update_info
+            self.btn_update.setEnabled(False)
+            reply = self.request(url)
+            reply.downloadProgress.connect(lambda done, total: self.lbl_update.setText(
+                f"Téléchargement de la version {version}… {done * 100 // max(total, 1)} %"))
+            reply.finished.connect(lambda: self.on_downloaded(reply, version, size))
+
+        def on_downloaded(self, reply, version, size):
+            reply.deleteLater()
+            data = bytes(reply.readAll())
+            if reply.error() != QNetworkReply.NoError or len(data) != size:  # téléchargement incomplet
+                self.lbl_update.setText("Le téléchargement de la mise à jour a échoué.")
+                self.btn_update.setEnabled(True)
+                return
+            setup = Path(tempfile.gettempdir()) / f"Discordable-Setup-{version}.exe"
+            setup.write_bytes(data)
+            # l'installeur ferme l'appli, met à jour puis la rouvre sur la même vidéo
+            subprocess.Popen([str(setup), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS",
+                              f"/RELAUNCH={self.src}"])
+            QApplication.quit()
 
         def closeEvent(self, e):
             if self.proc:

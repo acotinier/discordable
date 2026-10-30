@@ -2,7 +2,7 @@
 
 Compresse une vidéo pour qu'elle passe sous la limite d'upload de Discord, directement depuis le clic droit de l'Explorateur Windows.
 
-![Interface de Discordable : aperçu, découpe, paramètres et estimation](docs/interface.png)
+![Interface de Discordable : aperçu, découpe en plusieurs segments, paramètres et estimation](docs/segments.png)
 
 | Encodage en cours | Résultat : 1 Go → 18,8 Mo |
 |---|---|
@@ -13,11 +13,13 @@ Compresse une vidéo pour qu'elle passe sous la limite d'upload de Discord, dire
 - **Clic droit → Discordable** sur n'importe quelle vidéo (mp4, mkv, mov, avi, webm, wmv, flv, m4v, ts, mpg, 3gp).
 - Nom, dossier et taille du fichier : la taille s'affiche **en rouge** si elle dépasse la limite Discord (20 Mo par défaut, modifiable).
 - **Aperçu vidéo** avec lecture, timeline cliquable et **découpe début / fin** (touches `I` et `O`, `Espace` pour lecture/pause).
+- **Plusieurs segments** : garde autant de morceaux que tu veux, n'importe où dans la vidéo ; ils sont mis bout à bout à l'encodage et « Lire la sélection » prévisualise le montage.
 - **Estimation du poids final** et de la qualité, recalculée en direct à chaque réglage.
 - Paramètres : taille cible, résolution (auto, originale, 1080p → 360p), images/s, audio (AAC ou muet), vitesse d'encodage.
 - Encodage H.264 en **deux passes** pour viser la taille au plus juste, avec réajustement automatique si le fichier dépasse.
 - Après traitement : **aperçu du résultat**, ouverture du dossier, ou **copie du fichier** pour le coller (`Ctrl+V`) dans Discord.
 - Les derniers réglages sont mémorisés ; un bouton remet les réglages par défaut.
+- **Mises à jour** : au lancement, l'appli vérifie les nouvelles versions sur GitHub. Un clic sur « Mettre à jour » télécharge et installe la nouvelle version, puis rouvre la vidéo en cours.
 
 ## Installation
 

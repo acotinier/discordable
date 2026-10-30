@@ -41,6 +41,14 @@ Name: "{autodesktop}\Discordable"; Filename: "{app}\Discordable.exe"; Tasks: des
 ; Le clic droit est géré par l'appli elle-même (même liste d'extensions que le script)
 [Run]
 Filename: "{app}\Discordable.exe"; Parameters: "--install"; Flags: runhidden
+; Mise à jour depuis l'appli : elle passe /RELAUNCH=<vidéo> pour être rouverte après l'installation
+Filename: "{app}\Discordable.exe"; Parameters: """{param:RELAUNCH}"""; Flags: nowait; Check: WantsRelaunch
 
 [UninstallRun]
 Filename: "{app}\Discordable.exe"; Parameters: "--uninstall"; Flags: runhidden; RunOnceId: "ContextMenu"
+
+[Code]
+function WantsRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH}') <> '';
+end;
