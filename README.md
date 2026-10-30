@@ -15,6 +15,12 @@ Compresse une vidéo pour qu'elle passe sous la limite d'upload de Discord, dire
 
 ## Installation
 
+Télécharge `Discordable-Setup-x.y.z.exe` dans les [Releases](https://github.com/acotinier/discordable/releases) et lance-le. Aucun droit administrateur n'est nécessaire et FFmpeg est inclus.
+
+L'entrée **Discordable** apparaît dans le clic droit des vidéos. Sous Windows 11, elle se trouve dans « Afficher plus d'options » (ou `Maj + clic droit`). La désinstallation (Paramètres → Applications) retire aussi l'entrée du clic droit.
+
+### Depuis les sources
+
 Prérequis : Windows, [Python 3.10+](https://www.python.org/) et [FFmpeg](https://ffmpeg.org/).
 
 ```bash
@@ -23,11 +29,7 @@ pip install -r requirements.txt
 python discordable.py --install
 ```
 
-L'entrée **Discordable** apparaît dans le clic droit des vidéos. Sous Windows 11, elle se trouve dans « Afficher plus d'options » (ou `Maj + clic droit`).
-
-FFmpeg est cherché dans le `PATH`, puis à côté de `discordable.py`, puis dans le dossier d'installation winget.
-
-Pour retirer l'entrée du clic droit :
+FFmpeg est cherché dans le dossier `ffmpeg\` de l'appli, puis dans le `PATH`, puis dans le dossier d'installation winget. Pour retirer l'entrée du clic droit :
 
 ```bash
 python discordable.py --uninstall
@@ -50,3 +52,17 @@ python test_discordable.py
 ```
 
 Vérifie le calcul des réglages puis encode une vraie vidéo de test avec FFmpeg.
+
+## Construire l'installeur
+
+```bash
+pip install pyinstaller
+winget install JRSoftware.InnoSetup
+python build.py
+```
+
+Produit `build/Discordable-Setup-<version>.exe` (la version vient de `__version__` dans `discordable.py`). FFmpeg est téléchargé depuis [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) au premier build.
+
+## Licences tierces
+
+L'installeur embarque [FFmpeg](https://ffmpeg.org/) (build de gyan.dev, sous licence GPL v3, texte fourni dans `ffmpeg\LICENSE.txt`) et [Qt / PySide6](https://www.qt.io/qt-for-python) (LGPL v3).

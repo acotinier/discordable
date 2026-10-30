@@ -5,6 +5,8 @@ Usage :
     python discordable.py --install     ajoute "Discordable" au clic droit des vidéos
     python discordable.py --uninstall   retire l'entrée du clic droit
 """
+__version__ = "1.0.0"
+
 import glob
 import json
 import os
@@ -18,18 +20,20 @@ VIDEO_EXTS = [".mp4", ".mkv", ".mov", ".avi", ".webm", ".wmv", ".flv", ".m4v", "
 SIZES = [2160, 1440, 1080, 720, 480, 360]  # côté court, en pixels
 PRESETS = {"Rapide": "veryfast", "Équilibré": "medium", "Qualité": "slow"}
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+FROZEN = getattr(sys, "frozen", False)  # lancé depuis l'exe PyInstaller
+APP_DIR = Path(sys.executable if FROZEN else __file__).resolve().parent
 
 
 # ---------------------------------------------------------------- logique pure
 
 def find_tool(name):
-    """ffmpeg/ffprobe : PATH, puis à côté du script, puis l'install winget (Gyan.FFmpeg)."""
+    """ffmpeg/ffprobe : version livrée avec l'appli, puis PATH, puis l'install winget (Gyan.FFmpeg)."""
+    for local in (APP_DIR / "ffmpeg" / f"{name}.exe", APP_DIR / f"{name}.exe"):
+        if local.exists():
+            return str(local)
     found = shutil.which(name)
     if found:
         return found
-    local = Path(__file__).with_name(name + ".exe")
-    if local.exists():
-        return str(local)
     pattern = os.path.expandvars(rf"%LOCALAPPDATA%\Microsoft\WinGet\Packages\*FFmpeg*\*\bin\{name}.exe")
     hits = glob.glob(pattern)
     return hits[0] if hits else None
@@ -145,9 +149,11 @@ def _menu_keys():
 
 def install():
     import winreg
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    command = f'"{pythonw}" "{Path(__file__).resolve()}" "%1"'
-    icon = Path(__file__).with_name("discordable.ico")
+    if FROZEN:
+        command = f'"{sys.executable}" "%1"'
+    else:
+        command = f'"{Path(sys.executable).with_name("pythonw.exe")}" "{APP_DIR / "discordable.py"}" "%1"'
+    icon = APP_DIR / "discordable.ico"
     for key in _menu_keys():
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key) as k:
             winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "Discordable")
@@ -155,7 +161,8 @@ def install():
                 winreg.SetValueEx(k, "Icon", 0, winreg.REG_SZ, str(icon))
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key + r"\command") as k:
             winreg.SetValueEx(k, "", 0, winreg.REG_SZ, command)
-    print("Entrée « Discordable » ajoutée au clic droit des vidéos.")
+    if sys.stdout:  # None dans l'exe sans console
+        print("Entrée « Discordable » ajoutée au clic droit des vidéos.")
 
 
 def uninstall():
@@ -166,7 +173,8 @@ def uninstall():
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub)
             except FileNotFoundError:
                 pass
-    print("Entrée « Discordable » retirée du clic droit.")
+    if sys.stdout:
+        print("Entrée « Discordable » retirée du clic droit.")
 
 
 # ---------------------------------------------------------------- interface
@@ -674,11 +682,12 @@ def run_gui(path):
 
     app = QApplication(sys.argv)
     app.setApplicationName("Discordable")
-    app.setWindowIcon(QIcon(str(Path(__file__).with_name("discordable.ico"))))
+    app.setApplicationVersion(__version__)
+    app.setWindowIcon(QIcon(str(APP_DIR / "discordable.ico")))
     if not find_tool("ffmpeg") or not find_tool("ffprobe"):
         QMessageBox.critical(None, "Discordable", "ffmpeg est introuvable.\n\n"
                              "Installe-le avec :  winget install Gyan.FFmpeg\n"
-                             "ou place ffmpeg.exe et ffprobe.exe à côté de discordable.py.")
+                             "ou réinstalle Discordable (FFmpeg est inclus dans l'installeur).")
         return 1
     if not path:
         exts = " ".join("*" + e for e in VIDEO_EXTS)
